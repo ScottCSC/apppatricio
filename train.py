@@ -6,17 +6,25 @@ import numpy as np
 from utils.preprocessing import crear_lote_imagenes, aumentar_conjunto_datos
 import os
 import sys
+import argparse
+from utils.detector_radiografias import DetectorRadiografias
+from models.clasificador_enfermedades import ClasificadorEnfermedades
+from utils.generador_datos import GeneradorDatosRadiografias
 
 # Mapeo de categorías a números
 CATEGORIAS = {
     'normal': 0,
-    'inflamacion': 1,
-    'lesion': 2
+    'neumonia': 1,
+    'tuberculosis': 2,
+    'cancer_pulmon': 3,
+    'derrame_pleural': 4,
+    'epoc': 5,
+    'fibrosis_pulmonar': 6
 }
 
 def crear_modelo():
     """
-    Crea y compila el modelo de clasificación de manos.
+    Crea y compila el modelo de clasificación de radiografías.
     """
     print("Creando modelo...")
     modelo = Sequential([
@@ -30,7 +38,7 @@ def crear_modelo():
         Dense(256, activation='relu'),
         Dropout(0.5),
         Dense(128, activation='relu'),
-        Dense(3, activation='softmax')  # 3 clases: normal, inflamación, lesión
+        Dense(7, activation='softmax')  # 7 clases para las diferentes enfermedades
     ])
     
     modelo.compile(
@@ -114,19 +122,85 @@ def entrenar_modelo(ruta_datos, epocas=50, batch_size=32):
         print(f"Error durante el entrenamiento: {str(e)}", file=sys.stderr)
         return None, None
 
-if __name__ == "__main__":
-    # Verificar que existen los directorios necesarios
-    if not os.path.exists('data/processed'):
-        print("Error: No se encuentra el directorio 'data/processed'", file=sys.stderr)
-        sys.exit(1)
+def main():
+    # Configurar argumentos
+    parser = argparse.ArgumentParser(description='Entrenamiento del modelo de clasificación de radiografías')
+    parser.add_argument('--datos', type=str, required=True, help='Ruta al directorio de datos')
+    parser.add_argument('--epocas', type=int, default=100, help='Número de épocas de entrenamiento')
+    parser.add_argument('--batch_size', type=int, default=16, help='Tamaño del batch')
+    parser.add_argument('--modelo_salida', type=str, default='modelo_radiografias.h5', help='Ruta para guardar el modelo')
+    args = parser.parse_args()
     
-    # Entrenar modelo
-    modelo, historia = entrenar_modelo('data/processed')
+    # Verificar directorio de datos
+    if not os.path.exists(args.datos):
+        raise ValueError(f"El directorio de datos {args.datos} no existe")
     
-    if modelo is not None:
-        # Guardar modelo final
-        modelo.save('models/modelo_final.h5')
-        print("\nModelo guardado exitosamente en 'models/modelo_final.h5'")
-    else:
-        print("\nNo se pudo entrenar el modelo", file=sys.stderr)
-        sys.exit(1) 
+    try:
+        # Inicializar componentes
+        print("Inicializando componentes...")
+        detector = DetectorRadiografias()
+        
+        # Inicializar generador de datos
+        print("Configurando generador de datos...")
+        generador_datos = GeneradorDatosRadiografias(
+            directorio_datos=args.datos,
+            batch_size=args.batch_size
+        )
+        
+        # Obtener número de clases primero
+        print("Obteniendo clases...")
+        clases = generador_datos.obtener_clases()
+        num_clases = len(clases)
+        print(f"Clases detectadas: {clases}")
+        print(f"Número de clases: {num_clases}")
+        
+        # Obtener generadores de datos
+        print("Configurando generadores de entrenamiento y validación...")
+        generador_entrenamiento, generador_validacion = generador_datos.obtener_generadores()
+        
+        # Inicializar modelo
+        print("Inicializando modelo...")
+        clasificador = ClasificadorEnfermedades(num_clases=num_clases)
+        
+        # Configurar callbacks
+        print("Configurando callbacks...")
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=15,
+                restore_best_weights=True
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.2,
+                patience=5,
+                min_lr=1e-6
+            ),
+            tf.keras.callbacks.ModelCheckpoint(
+                'mejor_modelo.h5',
+                monitor='val_accuracy',
+                save_best_only=True,
+                mode='max'
+            )
+        ]
+        
+        print("Iniciando entrenamiento...")
+        historial = clasificador.entrenar(
+            generador_entrenamiento=generador_entrenamiento,
+            generador_validacion=generador_validacion,
+            epocas=args.epocas,
+            callbacks=callbacks
+        )
+        
+        # Guardar modelo
+        print(f"Guardando modelo en {args.modelo_salida}...")
+        clasificador.guardar_modelo(args.modelo_salida)
+        
+        print("¡Entrenamiento completado!")
+        
+    except Exception as e:
+        print(f"Error durante el entrenamiento: {str(e)}", file=sys.stderr)
+        raise
+
+if __name__ == '__main__':
+    main() 

@@ -1,4 +1,4 @@
-import os
+import os #manos que no sirbve
 import shutil
 from tkinter import Tk, filedialog, messagebox
 import tkinter as tk
